@@ -1,0 +1,9 @@
+.vercel
+.env*
+# Artefactos de build de Next: se regeneran con `next build` y no son fuente. Versionarlos ensucia
+# el árbol en cada build (96 archivos modificados solo por compilar) y son 20 MB que nadie revisa.
+.next/
+# Caché incremental de `tsc --noEmit`: cambia en cada typecheck y no es fuente.
+# `next-env.d.ts` sí se versiona a propósito: lo regenera Next, pero tsconfig lo incluye y la
+# convención de Next es mantenerlo en el repo.
+tsconfig.tsbuildinfo

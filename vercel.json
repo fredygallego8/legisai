@@ -1,0 +1,22 @@
+{
+  "functions": {
+    "src/app/api/chat/stream/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/chat/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/executive-summary/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/parse-document/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/rama-judicial/sincronizar/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/admin/reindex/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

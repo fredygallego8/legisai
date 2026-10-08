@@ -7,3 +7,4 @@
 # `next-env.d.ts` sí se versiona a propósito: lo regenera Next, pero tsconfig lo incluye y la
 # convención de Next es mantenerlo en el repo.
 tsconfig.tsbuildinfo
+node_modules

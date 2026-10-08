@@ -1,12 +1,11 @@
 /**
- * S17 · Subgrafos y estado — el subgrafo como nodo del padre y el checkpointer
- * como memoria del thread.
+ * S17 · Subgrafos y estado — el subgrafo compuesto en el padre y el
+ * checkpointer como memoria del thread.
  *
  * Entregable de S17 (documento de S15, sección 4): *"S17 · Subgrafos y
  * checkpointer declarado (S17, sobre Neon)"*. Criterio de salida: el grafo
- * padre compone un subgrafo reutilizable, el estado viaja entre ambos por
- * channels con reducer, y el thread reanuda donde quedó gracias al
- * checkpointer inyectado.
+ * padre compone un subgrafo reutilizable, el estado viaja entre ambos, y el
+ * thread reanuda donde quedó gracias al checkpointer inyectado.
  *
  * Cómo se cumple:
  *
@@ -24,9 +23,10 @@
  *   (`veredicto`); el padre conserva `traza`, `intentos` y `revisionHumana`
  *   para sí. La comunicación es por canales de nombre compartido, que es el
  *   contrato real entre grafos.
- * - El checkpointer (`MemorySaver` aquí, la factoría para Neon queda
- *   documentada más abajo) persiste el estado por `thread_id`: `getState`
- *   devuelve lo guardado y un corte con `interrupt` reanuda con `Command`.
+ * - El checkpointer (`MemorySaver` aquí; la factoría para Neon queda
+ *   documentada en `construirGrafoS17`) persiste el estado por `thread_id`:
+ *   `getState` devuelve lo guardado y un corte con `interrupt` reanuda con
+ *   `Command`.
  *
  * Sin red ni clave: respuestas y evidencia son sintéticas, para que la
  * reanudación se pueda ejecutar y verificar sin entorno. Lo inyectable es
@@ -34,15 +34,7 @@
  * entra por los nodos sin tocar el grafo.
  */
 
-import {
-  Annotation,
-  Command,
-  END,
-  MemorySaver,
-  START,
-  StateGraph,
-  interrupt,
-} from '@langchain/langgraph';
+import { Annotation, Command, END, MemorySaver, START, StateGraph, interrupt } from '@langchain/langgraph';
 
 /** Veredicto del subgrafo de verificación sobre la respuesta redactada. */
 export type Veredicto = 'pendiente' | 'verificado' | 'rechazado';
@@ -111,15 +103,17 @@ function redactarSintetico(consulta: string, intentos: number): string {
 function evidenciaSintetica(intentos: number): string[] {
   return [`evidencia-${intentos}-a`, `evidencia-${intentos}-b`];
 }
-
 /**
- * Nodo del subgrafo: cruza la respuesta del padre con la evidencia acumulada.
+ * Nodo del subgrafo: cruza la respuesta con la evidencia acumulada.
  *
  * La exigencia escala con la consulta: una consulta corta se verifica con un
  * lote; una consulta extensa pide más evidencia de la que el bucle automático
  * alcanza en `MAX_INTENTOS_S17` lotes, y eso la deriva al corte humano del
  * padre — los dos caminos del grafo (auto-verificado y revisión humana)
  * quedan así ejercitados con entradas deterministas.
+ *
+ * Devuelve SOLO `veredicto`: el subgrafo no reescribe lo que el padre le pasó,
+ * así el reducer del padre no duplica (ver lección de composición).
  */
 async function nodoCruzar(estado: EstadoSubgrafo): Promise<Partial<EstadoSubgrafo>> {
   const exigente = estado.consulta.trim().length > 120;
@@ -178,12 +172,12 @@ async function nodoPedirEvidencia(estado: Estado): Promise<Actualizacion> {
  * checkpointer no habría de dónde colgar la reanudación — por eso este nodo
  * es también la prueba de que el checkpointer funciona.
  */
-async function nodoRevisionHumana(estado: Estado): Promise<Actualizacion> {
-  const decision = await interrupt<{ motivo: string; respuesta: string; intentos: number }>({
+async function nodoCorteHumano(estado: Estado): Promise<Actualizacion> {
+  const decision = await interrupt<Record<string, unknown>, 'aprobar' | 'rechazar'>({
     motivo: 'El subgrafo rechazó la respuesta y se agotaron los intentos automáticos.',
     respuesta: estado.respuesta,
     intentos: estado.intentos,
-  }) as unknown as 'aprobar' | 'rechazar';
+  });
   return {
     revisionHumana: decision === 'aprobar' ? 'aprobada' : 'rechazada',
     veredicto: decision === 'aprobar' ? 'verificado' : 'rechazado',
@@ -199,19 +193,19 @@ async function nodoRevisionHumana(estado: Estado): Promise<Actualizacion> {
  * (`@langchain/langgraph-checkpoint-postgres` sobre `DATABASE_URL`, la misma
  * URL que ya usa `db.ts`). El grafo no cambia — eso es lo que quiere decir
  * "declarado" en el entregable.
+ *
+ * El nodo `verificar` es el único puente: invoca el subgrafo y propaga al
+ * padre únicamente su `veredicto`, que es el canal que comparten.
  */
 export function construirGrafoS17(checkpointer: MemorySaver) {
+  const subgrafo = crearSubgrafoVerificacion();
   return new StateGraph(EstadoS17)
     .addNode('redactar', async (estado: Estado): Promise<Actualizacion> => ({
       respuesta: redactarSintetico(estado.consulta, estado.intentos),
       traza: ['redactar'],
     }))
     .addNode('verificar', async (estado: Estado): Promise<Actualizacion> => {
-      // El padre invoca al subgrafo como un grafo compilado más. El subgrafo
-      // decide con lo que el padre le pasa y devuelve solo `veredicto`; la
-      // traza del paso la escribe el padre (no el hijo — ver la lección de
-      // composición en la cabecera).
-      const salida = await crearSubgrafoVerificacion().invoke({
+      const salida = await subgrafo.invoke({
         consulta: estado.consulta,
         respuesta: estado.respuesta,
         evidencia: estado.evidencia,
@@ -220,7 +214,7 @@ export function construirGrafoS17(checkpointer: MemorySaver) {
       return { veredicto: salida.veredicto, traza: ['verificar'] };
     })
     .addNode('pedirEvidencia', nodoPedirEvidencia)
-    .addNode('corteHumano', nodoRevisionHumana)
+    .addNode('corteHumano', nodoCorteHumano)
     .addEdge(START, 'redactar')
     .addEdge('redactar', 'verificar')
     .addConditionalEdges('verificar', rutaTrasVerificar, ['pedirEvidencia', 'corteHumano', END])
